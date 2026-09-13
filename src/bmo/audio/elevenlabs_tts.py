@@ -158,14 +158,7 @@ class ElevenLabsRealtimeClient:
         self._contexts.clear()
 
     async def _send(self, payload: dict[str, Any], *, allow_reconnect: bool = False) -> None:
-        """Send one protocol message, reconnecting only before a context exists.
-
-        ElevenLabs multi-context state belongs to one WebSocket. If that socket dies
-        after a context has begun, replaying text on a new socket could duplicate or
-        reorder speech. Therefore only context creation may reconnect/retry; an
-        established turn fails closed and the next turn opens a fresh context.
-        """
-
+        """Send one protocol message, reconnecting only before a context exists."""
         backoff = self.config.retry.initial_backoff_sec
         attempts = 4 if allow_reconnect else 1
         for attempt in range(attempts):
@@ -196,8 +189,6 @@ class ElevenLabsRealtimeClient:
 
     async def start_context(self, turn_id: int) -> str:
         context_id = f"turn-{turn_id}"
-        # A single space initializes a context without generating a spoken word. Context
-        # creation is the only protocol operation safe to replay after reconnect.
         await self._send({"context_id": context_id, "text": " "}, allow_reconnect=True)
         self._contexts[context_id] = _Context(turn_id=turn_id, context_id=context_id)
         await self.bus.publish(TTSStarted(turn_id=turn_id, context_id=context_id))
@@ -218,8 +209,8 @@ class ElevenLabsRealtimeClient:
     async def finish_context(self, context_id: str) -> None:
         if context_id not in self._contexts:
             return
-        await self._send({"context_id": context_id, "flush": True})
-        # Closing a context also flushes it and frees one of the five context slots.
+        # close_context flushes buffered text and the service responds with is_final.
+        # A redundant flush immediately before close_context can race the context lifecycle.
         await self._send({"context_id": context_id, "close_context": True})
 
     async def cancel_context(self, turn_id: int) -> None:
@@ -233,6 +224,11 @@ class ElevenLabsRealtimeClient:
         try:
             async for raw in ws:
                 data = json.loads(raw)
+                error = data.get("error")
+                if error:
+                    detail = error if isinstance(error, str) else json.dumps(error, default=str)
+                    LOG.error("ElevenLabs protocol error: %s", detail)
+                    raise RuntimeError(f"ElevenLabs protocol error: {detail}")
                 context_id = data.get("context_id")
                 ctx = self._contexts.get(context_id)
                 if ctx is None:
@@ -263,7 +259,6 @@ class ElevenLabsRealtimeClient:
                 await self._drop_socket(exc, expected_ws=ws)
 
     async def _drop_socket(self, exc: Exception, *, expected_ws: Any = None) -> None:
-        # A late exception from an old receiver must never tear down a newer socket.
         if expected_ws is not None and self._ws is not expected_ws:
             with contextlib.suppress(Exception):
                 await expected_ws.close()
@@ -275,8 +270,6 @@ class ElevenLabsRealtimeClient:
         if self._connected:
             await self.bus.publish(NetworkLost(service="elevenlabs_tts", detail=type(exc).__name__))
         self._connected = False
-        # Server contexts do not survive a transport reconnect. The next turn will
-        # reconnect with backoff; the interrupted TTS turn fails instead of replaying.
         self._contexts.clear()
 
 
@@ -328,8 +321,6 @@ class TTSService:
                 try:
                     chunker, context = await self._ensure_turn(turn_id)
                     for phrase in chunker.add(event.text):
-                        # Current ElevenLabs multi-context guidance recommends flushing
-                        # complete sentences while allowing partial phrases to buffer naturally.
                         sentence_boundary = phrase.rstrip().endswith((".", "!", "?"))
                         await self.client.send_text(context, phrase, flush=sentence_boundary)
                 except asyncio.CancelledError:
