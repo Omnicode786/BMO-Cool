@@ -1,3 +1,7 @@
+param(
+    [switch]$DebugLogs
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -11,22 +15,27 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $bmo = Join-Path $repoRoot ".venv\Scripts\bmo-pi.exe"
 
-& $python -m pip install -e .
+& $python -m pip install -q -e .
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if (-not (Test-Path ".env")) {
-    Write-Warning ".env is missing. Copy .env.example to .env and add your Gemini/ElevenLabs credentials."
+    Write-Error ".env is missing. Copy .env.example to .env and add your Gemini/ElevenLabs credentials."
 }
 
-$mockSetting = $null
-if (Test-Path ".env") {
-    $mockSetting = Select-String -Path ".env" -Pattern '^\s*BMO_MOCK_CLOUD\s*=\s*true\s*$' -CaseSensitive:$false
-}
+$mockSetting = Select-String -Path ".env" -Pattern '^\s*BMO_MOCK_CLOUD\s*=\s*true\s*$' -CaseSensitive:$false
 if ($mockSetting) {
-    Write-Warning "BMO_MOCK_CLOUD=true is set in .env. Change it to false to use real Gemini/ElevenLabs services."
+    Write-Error "BMO_MOCK_CLOUD=true is set in .env. Change it to false for the real simulator."
 }
 
-Write-Host "Starting the browser simulator in REAL cloud mode..."
+Write-Host "Starting BMO browser simulator with REAL Gemini + ElevenLabs..."
 Write-Host "Open http://127.0.0.1:8765"
-& $bmo --simulator --debug @args
+Write-Host "Simulator defaults to Touch-to-talk. Start Mic + Speaker, hold TOUCH while speaking, then release."
+
+$runArgs = @("--simulator")
+if ($DebugLogs) {
+    Write-Host "Verbose debug logging enabled."
+    $runArgs += "--debug"
+}
+
+& $bmo @runArgs @args
 exit $LASTEXITCODE
