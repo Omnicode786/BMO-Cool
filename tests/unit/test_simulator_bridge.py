@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 
@@ -41,6 +42,29 @@ async def test_simulator_touch_publishes_push_to_talk_edges() -> None:
         assert (await starts.get()).source == "simulator-touch"
         assert (await ends.get()).source == "simulator-touch"
     finally:
+        starts.close()
+        ends.close()
+        await controls.stop()
+
+
+@pytest.mark.asyncio
+async def test_touch_to_talk_hold_does_not_publish_touch_gesture() -> None:
+    bus = EventBus()
+    controls = SimulatorControlsService(bus, ControlsConfig())
+    gestures = await bus.subscribe(ControlEvent, name="test-ptt-no-gesture")
+    starts = await bus.subscribe(PushToTalkStarted, name="test-ptt-mode-start")
+    ends = await bus.subscribe(PushToTalkEnded, name="test-ptt-mode-end")
+    controls.set_listening_mode("touch_to_talk")
+    try:
+        await controls.touch_down()
+        await asyncio.sleep(0.01)
+        await controls.touch_up()
+        assert (await starts.get()).source == "simulator-touch"
+        assert (await ends.get()).source == "simulator-touch"
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(gestures.get(), timeout=0.05)
+    finally:
+        gestures.close()
         starts.close()
         ends.close()
         await controls.stop()
