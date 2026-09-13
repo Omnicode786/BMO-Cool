@@ -67,6 +67,36 @@ class Application:
         hardware = self.settings.hardware
         secrets = self.settings.secrets
         profile = behavior.performance.active
+        simulator_enabled = bool(getattr(self.args, "simulator", False))
+        simulator_bridge: Any = None
+        simulator_controls_cls: Any = None
+        simulator_capture_cls: Any = None
+        simulator_camera_cls: Any = None
+        simulator_oled_cls: Any = None
+        simulator_playback_cls: Any = None
+        if simulator_enabled:
+            from .simulator import (
+                SimulatorAudioCaptureService,
+                SimulatorBridgeService,
+                SimulatorCameraService,
+                SimulatorControlsService,
+                SimulatorOLEDDevice,
+                SimulatorPlaybackService,
+            )
+
+            simulator_controls_cls = SimulatorControlsService
+            simulator_capture_cls = SimulatorAudioCaptureService
+            simulator_camera_cls = SimulatorCameraService
+            simulator_oled_cls = SimulatorOLEDDevice
+            simulator_playback_cls = SimulatorPlaybackService
+            simulator_bridge = SimulatorBridgeService(
+                self.bus,
+                self.state,
+                self.turns,
+                root / "simulator",
+                host=getattr(self.args, "simulator_host", "127.0.0.1"),
+                port=getattr(self.args, "simulator_port", 8765),
+            )
 
         memory = MemoryStore(
             root / behavior.memory.database_path,
@@ -88,10 +118,10 @@ class Application:
         elif secrets.gemini_api_key:
             vision_client = GeminiVisionClient(secrets.gemini_api_key, behavior.gemini, behavior.vision)
 
-        if self.args.camera_fixtures:
-            camera: Any = FixtureCameraService(
-                self.bus, frame_buffer, Path(self.args.camera_fixtures), profile.camera_fps
-            )
+        if simulator_enabled:
+            camera: Any = simulator_camera_cls(self.bus, frame_buffer)
+        elif self.args.camera_fixtures:
+            camera = FixtureCameraService(self.bus, frame_buffer, Path(self.args.camera_fixtures), profile.camera_fps)
         else:
             camera = CameraService(self.bus, hardware.camera, profile, frame_buffer)
 
@@ -150,10 +180,10 @@ class Application:
         preprocess = AudioPreprocessorService(self.bus, self.state, behavior.audio)
         vad = VADService(self.bus, self.state, self.turns, behavior.audio, self.latency)
         interruption = InterruptionService(self.bus, self.state)
-        if self.args.wav:
-            capture: Any = WavFixtureCaptureService(
-                self.bus, Path(self.args.wav), behavior.audio.chunk_ms, self.args.loop_wav
-            )
+        if simulator_enabled:
+            capture: Any = simulator_capture_cls(self.bus)
+        elif self.args.wav:
+            capture = WavFixtureCaptureService(self.bus, Path(self.args.wav), behavior.audio.chunk_ms, self.args.loop_wav)
         else:
             capture = AudioCaptureService(self.bus, hardware.microphone, behavior.audio)
 
@@ -183,8 +213,12 @@ class Application:
             else:
                 tts = None
 
-        if self.args.dev or self.args.no_playback:
-            playback: Any = MemoryPlaybackService(self.bus, self.turns)
+        if simulator_enabled:
+            playback: Any = simulator_playback_cls(
+                self.bus, self.turns, self.latency, simulator_bridge, mock_cloud=mock_cloud
+            )
+        elif self.args.dev or self.args.no_playback:
+            playback = MemoryPlaybackService(self.bus, self.turns)
         else:
             playback = AudioPlaybackService(
                 self.bus,
@@ -197,22 +231,30 @@ class Application:
             )
 
         oled_config = hardware.oled.model_copy()
-        if self.args.oled_console or self.args.dev:
+        if simulator_enabled:
             oled_config.driver = "console"
-        oled_device = ConsoleOLEDDevice(oled_config) if oled_config.driver == "console" else None
-        if oled_device is None:
-            try:
-                oled_device = create_oled_device(oled_config)
-            except Exception as exc:
-                LOG.warning("OLED initialization failed; using console fallback: %s", exc)
+            oled_device: Any = simulator_oled_cls(oled_config, simulator_bridge)
+        else:
+            if self.args.oled_console or self.args.dev:
                 oled_config.driver = "console"
-                oled_device = ConsoleOLEDDevice(oled_config)
+            oled_device = ConsoleOLEDDevice(oled_config) if oled_config.driver == "console" else None
+            if oled_device is None:
+                try:
+                    oled_device = create_oled_device(oled_config)
+                except Exception as exc:
+                    LOG.warning("OLED initialization failed; using console fallback: %s", exc)
+                    oled_config.driver = "console"
+                    oled_device = ConsoleOLEDDevice(oled_config)
         oled = OLEDService(self.bus, oled_device, behavior.oled, fps=profile.oled_fps)
 
-        if self.args.keyboard_controls or self.args.dev:
-            controls: Any = KeyboardControlsService(self.bus)
+        if simulator_enabled:
+            controls: Any = simulator_controls_cls(self.bus, behavior.controls)
+        elif self.args.keyboard_controls or self.args.dev:
+            controls = KeyboardControlsService(self.bus)
         else:
             controls = GPIOControlsService(self.bus, hardware, behavior.controls)
+        if simulator_enabled:
+            simulator_bridge.bind_adapters(controls=controls, capture=capture, camera=camera)
         modes = ModeController(self.bus, self.state, self.turns, behavior.controls)
         game = GameService(self.bus, hardware.oled.width, hardware.oled.height)
         state_events = StateEventService(self.bus, self.state, expect_playback=tts is not None)
@@ -245,6 +287,7 @@ class Application:
             ("cloud_vision", cloud_escalation, False),
             ("controls", controls, False),
             ("health", health, False),
+            ("simulator", simulator_bridge, simulator_enabled),
             ("camera", camera, False),
             ("capture", capture, False),
         ]
@@ -308,6 +351,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--oled-console", action="store_true")
     parser.add_argument("--keyboard-controls", action="store_true")
     parser.add_argument("--no-playback", action="store_true", help="consume TTS PCM without opening a speaker device")
+    parser.add_argument(
+        "--simulator",
+        action="store_true",
+        help="replace physical camera/mic/controls/speaker/OLED with the browser simulator",
+    )
+    parser.add_argument("--simulator-host", default="127.0.0.1", help="simulator HTTP/WebSocket bind host")
+    parser.add_argument("--simulator-port", type=int, default=8765, help="simulator HTTP port; WebSocket uses port+1")
     return parser
 
 
