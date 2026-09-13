@@ -75,13 +75,13 @@ class GPIOControlsService:
         if cfg.pull_up is not None:
             return button_cls(cfg.gpio_pin, pull_up=cfg.pull_up, bounce_time=bounce)
         if cfg.active_high:
-            return button_cls(cfg.gpio_pin, pull_up=False, active_state=True, bounce_time=bounce)
+            return button_cls(cfg.gpio_pin, pull_up=False, bounce_time=bounce)
         return button_cls(cfg.gpio_pin, pull_up=True, bounce_time=bounce)
 
     def _make_joystick_button(self, button_cls: Any, cfg: JoystickHardware, pin: int) -> Any:
         bounce = self.controls.timing.debounce_ms / 1000.0
         if cfg.active_high:
-            return button_cls(pin, pull_up=False, active_state=True, bounce_time=bounce)
+            return button_cls(pin, pull_up=False, bounce_time=bounce)
         return button_cls(pin, pull_up=True, bounce_time=bounce)
 
     def _thread_publish(self, event: Any) -> None:
