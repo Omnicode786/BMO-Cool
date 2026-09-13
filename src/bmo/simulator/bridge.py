@@ -15,7 +15,7 @@ from enum import Enum
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from ..config import ControlsConfig, OLEDHardware
 from ..event_bus import EventBus
@@ -26,6 +26,7 @@ from ..events import (
     ControlAction,
     ControlEvent,
     Event,
+    GameStateUpdated,
     HandObservationEvent,
     ListeningModeChanged,
     MicAudioChunk,
@@ -42,7 +43,14 @@ from ..state import StateMachine, TurnManager
 from ..vision.frame_buffer import FrameBuffer, FrameRecord
 
 LOG = logging.getLogger(__name__)
-_HIGH_RATE_EVENTS = (MicAudioChunk, ProcessedAudioChunk, CameraFrame, TTSAudioChunk, HandObservationEvent)
+_HIGH_RATE_EVENTS = (
+    MicAudioChunk,
+    ProcessedAudioChunk,
+    CameraFrame,
+    TTSAudioChunk,
+    HandObservationEvent,
+    GameStateUpdated,
+)
 _MAX_MIC_BYTES = 512 * 1024
 _MAX_CAMERA_BYTES = 2 * 1024 * 1024
 
@@ -65,6 +73,7 @@ class SimulatorControlsService:
         self._touch_press_at = 0.0
         self._touch_down = False
         self._pending_tap: asyncio.Task[None] | None = None
+        self._listening_mode = "vad"
 
     async def start(self) -> None:
         return
@@ -75,6 +84,14 @@ class SimulatorControlsService:
             await asyncio.gather(self._pending_tap, return_exceptions=True)
             self._pending_tap = None
         self._touch_down = False
+
+    def set_listening_mode(self, mode: str) -> None:
+        if mode not in {"always", "vad", "touch_to_talk"}:
+            raise ValueError("invalid listening mode")
+        self._listening_mode = mode
+        if mode == "touch_to_talk" and self._pending_tap:
+            self._pending_tap.cancel()
+            self._pending_tap = None
 
     async def trigger(self, action: str, *, duration_ms: int = 0) -> None:
         try:
@@ -96,6 +113,13 @@ class SimulatorControlsService:
         self._touch_down = False
         duration_ms = int((time.monotonic() - self._touch_press_at) * 1000)
         await self.bus.publish(PushToTalkEnded(source="simulator-touch"))
+
+        # In touch-to-talk mode the hold duration belongs to the microphone gesture,
+        # not to BMO's tap/double/long touch UI. Without this guard a normal PTT hold
+        # is interpreted as TOUCH_LONG and puts the device to sleep.
+        if self._listening_mode == "touch_to_talk":
+            return
+
         if duration_ms >= self.config.timing.long_press_ms:
             if self._pending_tap:
                 self._pending_tap.cancel()
@@ -234,6 +258,7 @@ class SimulatorBridgeService:
         self.controls: SimulatorControlsService | None = None
         self.capture: SimulatorAudioCaptureService | None = None
         self.camera: SimulatorCameraService | None = None
+        self._speaker_complete: Callable[[int], Awaitable[None]] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._http_server: ThreadingHTTPServer | None = None
         self._http_thread: threading.Thread | None = None
@@ -253,6 +278,9 @@ class SimulatorBridgeService:
         self.controls = controls
         self.capture = capture
         self.camera = camera
+
+    def bind_speaker_complete(self, callback: Callable[[int], Awaitable[None]]) -> None:
+        self._speaker_complete = callback
 
     async def start(self) -> None:
         if not (self.controls and self.capture and self.camera):
@@ -405,7 +433,13 @@ class SimulatorBridgeService:
             mode = str(message.get("mode", ""))
             if mode not in {"always", "vad", "touch_to_talk"}:
                 raise ValueError("invalid listening mode")
+            assert self.controls is not None
+            self.controls.set_listening_mode(mode)
             await self.bus.publish(ListeningModeChanged(mode=mode))
+            return
+        if kind == "speaker_complete":
+            if self._speaker_complete is not None:
+                await self._speaker_complete(int(message.get("turn_id", 0)))
             return
         if kind == "ping":
             await self.emit({"type": "pong", "time": time.time()})
@@ -442,7 +476,7 @@ class SimulatorOLEDDevice:
 
 
 class SimulatorPlaybackService:
-    """Send real Python TTS PCM to the browser while preserving playback state events."""
+    """Send real Python TTS PCM to the browser while preserving audible playback boundaries."""
 
     def __init__(
         self,
@@ -462,7 +496,9 @@ class SimulatorPlaybackService:
         self._task: asyncio.Task[None] | None = None
         self._playing_turn: int | None = None
         self._first_audio_turns: set[int] = set()
+        self._tts_finished_turns: set[int] = set()
         self._mock_finish_task: asyncio.Task[None] | None = None
+        self.bridge.bind_speaker_complete(self.browser_finished)
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="simulator-playback")
@@ -486,8 +522,11 @@ class SimulatorPlaybackService:
                 if isinstance(event, TTSAudioChunk):
                     await self._audio(event)
                 elif isinstance(event, TTSFinished):
-                    if event.turn_id is not None and self._playing_turn == int(event.turn_id):
-                        await self._stop_playback(interrupted=False)
+                    if event.turn_id is not None:
+                        turn_id = int(event.turn_id)
+                        self._tts_finished_turns.add(turn_id)
+                        if self._playing_turn == turn_id:
+                            await self.bridge.emit({"type": "speaker_end", "turn_id": turn_id})
                 elif isinstance(event, BargeIn):
                     if self._playing_turn == event.interrupted_turn_id:
                         await self._stop_playback(interrupted=True)
@@ -519,15 +558,25 @@ class SimulatorPlaybackService:
             self._first_audio_turns.add(turn_id)
             self.latency.mark(turn_id, "speaker_first_audio")
 
+    async def browser_finished(self, turn_id: int) -> None:
+        if turn_id <= 0 or self._playing_turn != turn_id:
+            return
+        if turn_id not in self._tts_finished_turns:
+            return
+        await self._stop_playback(interrupted=False)
+
     async def _finish_mock_after_delay(self, turn_id: int) -> None:
         await asyncio.sleep(0.35)
         if self._playing_turn == turn_id:
+            self._tts_finished_turns.add(turn_id)
             await self._stop_playback(interrupted=False)
 
     async def _stop_playback(self, *, interrupted: bool) -> None:
         turn_id, self._playing_turn = self._playing_turn, None
-        await self.bridge.emit({"type": "speaker_clear", "interrupted": interrupted})
+        if interrupted:
+            await self.bridge.emit({"type": "speaker_clear", "interrupted": True})
         if turn_id is not None:
+            self._tts_finished_turns.discard(turn_id)
             await self.bus.publish(PlaybackStopped(turn_id=turn_id, interrupted=interrupted))
 
 
