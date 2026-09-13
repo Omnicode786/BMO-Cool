@@ -1,0 +1,27 @@
+# PipeWire 1.x drop-in, based on the current official echo-cancel module syntax.
+# Copy to ~/.config/pipewire/pipewire.conf.d/60-bmo-echo-cancel.conf and restart
+# the user's PipeWire/WirePlumber session (or reboot).
+context.modules = [
+  { name = libpipewire-module-echo-cancel
+    args = {
+      library.name = aec/libspa-aec-webrtc
+      monitor.mode = false
+      capture.props = {
+        node.name = "bmo_echo_cancel_capture"
+        node.description = "BMO Echo Cancel Capture"
+      }
+      source.props = {
+        node.name = "bmo_echo_cancel_source"
+        node.description = "BMO Echo Cancel Source"
+      }
+      sink.props = {
+        node.name = "bmo_echo_cancel_sink"
+        node.description = "BMO Echo Cancel Sink"
+      }
+      playback.props = {
+        node.name = "bmo_echo_cancel_playback"
+        node.description = "BMO Echo Cancel Playback"
+      }
+    }
+  }
+]

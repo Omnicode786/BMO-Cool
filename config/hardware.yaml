@@ -1,0 +1,58 @@
+# Reference Raspberry Pi 4 wiring. GPIO numbers use BCM numbering.
+camera:
+  enabled: true
+  resolution: [640, 360]
+  snapshot_resolution: [1280, 720]
+  fps: 8
+  device: 0
+
+microphone:
+  # null lets PortAudio use the selected system default. For PipeWire AEC,
+  # set this to a device/source name containing "echo-cancel" when exposed.
+  device: null
+  sample_rate: 16000
+  channels: 1
+
+speaker:
+  device: null
+  sample_rate: 24000
+  channels: 1
+
+oled:
+  enabled: true
+  driver: ssd1306
+  i2c_bus: 1
+  i2c_address: 0x3C
+  width: 128
+  height: 64
+
+touch:
+  enabled: true
+  driver: gpiozero
+  gpio_pin: 17
+  active_high: true
+  pull_up: null
+
+button_a:
+  enabled: true
+  driver: gpiozero
+  gpio_pin: 22
+  active_high: false
+  pull_up: true
+
+button_b:
+  enabled: true
+  driver: gpiozero
+  gpio_pin: 23
+  active_high: false
+  pull_up: true
+
+joystick:
+  enabled: true
+  driver: gpiozero
+  up_pin: 5
+  down_pin: 6
+  left_pin: 13
+  right_pin: 19
+  press_pin: 26
+  active_high: false

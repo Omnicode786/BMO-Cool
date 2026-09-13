@@ -1,0 +1,136 @@
+audio:
+  chunk_ms: 30
+  listening_mode: vad
+  aec_mode: pipewire
+  echo_cancel_source_hint: echo cancel source
+  echo_cancel_sink_hint: echo cancel sink
+  queue_max_chunks: 64
+  local_vad_threshold: 0.018
+  vad_threshold_while_speaking_multiplier: 1.8
+  vad_start_frames: 2
+  vad_end_frames: 10
+  feedback_suppression_rms: 0.25
+  speaker_duck_gain: 0.82
+
+tts:
+  min_chunk_chars: 30
+  max_chunk_chars: 130
+  inactivity_timeout_sec: 120
+  # ElevenLabs recommends auto_mode only for complete sentences. BMO feeds partial
+  # generated phrases, so false preserves voice quality while still streaming.
+  auto_mode: false
+  playback_slice_ms: 20
+  queue_max_chunks: 160
+
+gemini:
+  brain_model: gemini-3.7-flash
+  transcription_model: gemini-3.5-transcribe-live
+  max_llm_calls: 8
+  proactive_max_llm_calls: 3
+  enable_session_resumption: true
+  enable_context_compression: true
+  transcription_language_codes: []
+  retry:
+    connect_timeout_sec: 10
+    read_timeout_sec: 30
+    initial_backoff_sec: 0.5
+    max_backoff_sec: 20
+    jitter_ratio: 0.2
+
+elevenlabs:
+  model_id: eleven_flash_v2_5
+  output_format: pcm_24000
+  retry:
+    connect_timeout_sec: 10
+    read_timeout_sec: 30
+    initial_backoff_sec: 0.5
+    max_backoff_sec: 20
+    jitter_ratio: 0.2
+
+performance:
+  mode: normal
+  lite:
+    camera_resolution: [320, 240]
+    camera_fps: 5
+    vision_every_n_motion_frames: 2
+    oled_fps: 5
+    person_detector_enabled: false
+  normal:
+    camera_resolution: [640, 360]
+    camera_fps: 8
+    vision_every_n_motion_frames: 1
+    oled_fps: 8
+    person_detector_enabled: true
+
+vision:
+  frame_buffer_seconds: 2.5
+  cloud_max_width: 960
+  jpeg_quality: 78
+  cloud_escalation_cooldown_sec: 4.0
+  ocr_confidence_threshold: 0.62
+  hand_landmarker_model: models/hand_landmarker.task
+  person_detection_stride: 2
+  motion:
+    threshold: 0.08
+    pixel_delta_threshold: 18
+    min_changed_area: 0.025
+    persistence_frames: 3
+    debounce_sec: 0.25
+    cooldown_sec: 1.0
+    lighting_change_mean_delta: 20.0
+    lighting_change_fraction: 0.65
+    exposure_reject_sec: 0.8
+  wave:
+    window_sec: 2.2
+    min_samples: 6
+    min_reversals: 2
+    min_amplitude: 0.16
+    min_tracking_confidence: 0.50
+    max_wrist_y: 0.78
+    raised_ratio: 0.70
+    local_confidence_threshold: 0.60
+    low_confidence_floor: 0.30
+    cooldown_sec: 20
+
+event_policy:
+  dedupe_window_sec: 6
+  proactive_min_priority: 70
+  visual_reaction_cooldown_sec: 8
+  wave_priority: 90
+  person_arrived_priority: 65
+  object_shown_priority: 75
+  scene_change_priority: 35
+
+memory:
+  enabled: true
+  explicit_preferences_enabled: false
+  database_path: data/bmo_memory.sqlite3
+  remembered_events_path: data/remembered_events.jsonl
+  recent_turn_limit: 20
+  retrieval_limit: 6
+
+personality:
+  name: Beemo
+  roast_level: 2
+  default_mood: happy
+  mood_decay_sec: 45
+  proactive_chattiness: 0.35
+
+controls:
+  timing:
+    double_tap_ms: 400
+    long_press_ms: 1200
+    debounce_ms: 35
+  modes: [companion, game, status, sleep]
+  keyboard_enabled_in_dev: true
+
+oled:
+  expression_hold_sec: 1.2
+  blink_min_sec: 2.0
+  blink_max_sec: 5.0
+
+health:
+  interval_sec: 10
+  internet_host: generativelanguage.googleapis.com
+  internet_port: 443
+  network_failure_threshold: 2

@@ -1,0 +1,34 @@
+[Unit]
+Description=BMO Pi realtime companion
+Documentation=file:/opt/bmo_pi/README.md
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+User=bmo
+Group=bmo
+SupplementaryGroups=audio video render gpio i2c
+WorkingDirectory=/opt/bmo_pi
+EnvironmentFile=/opt/bmo_pi/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+ExecStart=/opt/bmo_pi/.venv/bin/python -m bmo
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/bmo_pi/data /opt/bmo_pi/logs /opt/bmo_pi/models
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
