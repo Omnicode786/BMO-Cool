@@ -5,7 +5,7 @@ This folder contains the browser UI only. It is **not a standalone fake**: when 
 ## Quick start with local cloud mocks
 
 ```bash
-./scripts/run_simulator.sh
+bash scripts/run_simulator.sh
 ```
 
 Open <http://127.0.0.1:8765>, enable the browser camera/microphone as desired, and interact with the controls.
@@ -30,4 +30,6 @@ Python sends back:
 - typed EventBus events (state, mode, mood, transcript, agent output, health, vision, etc.)
 - TTS PCM for browser speaker playback
 
-HTTP uses `--simulator-port` (default `8765`) and the WebSocket uses the next port (`8766`). The default host is loopback-only. To view a Pi-hosted simulator from another machine on a trusted LAN, pass `--simulator-host 0.0.0.0` and browse to the Pi's IP and HTTP port.
+HTTP uses `--simulator-port` (default `8765`) and the WebSocket uses the next port (`8766`). The default host is loopback-only.
+
+For the full webcam/microphone experience, open the simulator on the same machine as the Python process at `http://127.0.0.1:8765` (or use a secure HTTPS setup). Browsers generally restrict camera/microphone APIs on ordinary non-local HTTP pages, so opening `http://PI-IP:8765` from another computer may still allow controls/OLED but can block browser camera/mic permissions. If you bind with `--simulator-host 0.0.0.0`, do so only on a trusted network because the development simulator has no authentication.
